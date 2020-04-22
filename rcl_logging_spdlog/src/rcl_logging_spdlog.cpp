@@ -182,8 +182,10 @@ rcl_logging_ret_t rcl_logging_external_initialize(
 
     //g_root_logger = spdlog::basic_logger_mt("root", name_buffer);
 
-    spdlog::init_thread_pool(8192, 1);
-
+    if(spdlog::thread_pool() == nullptr) {
+      std::cout << "initializing thread pool\n";
+      spdlog::init_thread_pool(8192, 1);
+    }
     auto sinks = create_sinks(name_buffer);
     g_root_logger = std::make_shared<spdlog::async_logger>("root",
                                                            sinks.begin(),
