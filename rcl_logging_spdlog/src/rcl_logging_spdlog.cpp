@@ -27,6 +27,8 @@
 #include <utility>
 
 #include "spdlog/spdlog.h"
+#include <spdlog/async.h>
+#include <spdlog/sinks/syslog_sink.h>
 #include "spdlog/sinks/basic_file_sink.h"
 
 #include "rcl_logging_spdlog/logging_interface.h"
@@ -40,6 +42,55 @@ extern "C" {
 
 static std::mutex g_logger_mutex;
 static std::unique_ptr<spdlog::logger> g_root_logger = nullptr;
+
+#include <sys/types.h>
+#include <sys/stat.h>
+
+namespace helper{
+/******************************************************************************
+* Checks to see if a directory exists. Note: This method only checks the
+* existence of the full path AND if path leaf is a dir.
+*
+* @return  >0 if dir exists AND is a dir,
+*           0 if dir does not exist OR exists but not a dir,
+*          <0 if an error occurred (errno is also set)
+*****************************************************************************/
+static inline int dirExists(const char* const path)
+{
+  struct stat info;
+
+  int statRC = stat( path, &info );
+  if( statRC != 0 )
+  {
+    if (errno == ENOENT)  { return 0; } // something along the path does not exist
+    if (errno == ENOTDIR) { return 0; } // something in path prefix is not a dir
+    return -1;
+  }
+
+  return ( info.st_mode & S_IFDIR ) ? 1 : 0;
+}
+
+static std::string getLogDirectory()
+{
+  std::string logDir("");
+  char *      logDirChar = getenv("LOG_DIR");
+
+  if (logDirChar == NULL) {
+    std::cerr << "LOG_DIR NOT SET! Using executable directory" << std::endl;
+    return logDir;
+  }
+
+  if (helper::dirExists(logDirChar) == 0) {
+    int status = mkdir(logDirChar, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+    std::cout << "Created log directory with status " << status << std::endl;
+  }
+
+  logDir = logDirChar;
+  std::cout << "RCL LOG_DIR = " << logDir << std::endl;
+  return logDir;
+}
+
+}
 
 static spdlog::level::level_enum map_external_log_level_to_library_level(int external_level)
 {
@@ -58,6 +109,34 @@ static spdlog::level::level_enum map_external_log_level_to_library_level(int ext
     level = spdlog::level::level_enum::critical;
   }
   return level;
+}
+
+std::vector<spdlog::sink_ptr> create_sinks(const std::string &             logfileName,
+                                           const spdlog::level::level_enum fileLevel = spdlog::level::trace,
+                                           const spdlog::level::level_enum consoleLevel = spdlog::level::trace)
+{
+
+//  auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+//  console_sink->set_level(consoleLevel);
+
+  using Clock = std::chrono::system_clock;
+
+  std::time_t now = Clock::to_time_t(Clock::now());
+
+  std::stringstream timeString;
+  timeString << std::put_time(std::localtime(&now), "%d-%m-%Y-%X");
+
+  std::string logFile = helper::getLogDirectory() + "/" + logfileName + "_" + timeString.str() + ".log";
+  std::cout << "Setting logger up for logging to file: " << logFile << std::endl;
+
+  auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logFile, true);
+  file_sink->set_pattern("%v");
+  file_sink->set_level(fileLevel);
+
+  auto syslog_sink = std::make_shared<spdlog::sinks::syslog_sink_mt>(logfileName, LOG_PID, LOG_USER);
+  syslog_sink->set_level(consoleLevel);
+
+  return {file_sink, syslog_sink};
 }
 
 rcl_logging_ret_t rcl_logging_external_initialize(
@@ -79,52 +158,10 @@ rcl_logging_ret_t rcl_logging_external_initialize(
       "spdlog logging backend doesn't currently support external configuration");
     return RCL_LOGGING_RET_ERROR;
   } else {
-    // To be compatible with ROS 1, we construct a default filename of
-    // the form ~/.ros/log/<exe>_<pid>_<milliseconds-since-epoch>.log
-
-    // First get the home directory.
-    const char * homedir = rcutils_get_home_dir();
-    if (homedir == nullptr) {
-      // We couldn't get the home directory; it is not really going to be
-      // possible to do logging properly, so get out of here without setting
-      // up logging.
-      RCUTILS_SET_ERROR_MSG("Failed to get users home directory");
-      return RCL_LOGGING_RET_ERROR;
-    }
 
     // SPDLOG doesn't automatically create the log directories, so make them
     // by hand here.
     char name_buffer[4096] = {0};
-    int print_ret = rcutils_snprintf(name_buffer, sizeof(name_buffer), "%s/.ros", homedir);
-    if (print_ret < 0) {
-      RCUTILS_SET_ERROR_MSG("Failed to create home directory string");
-      return RCL_LOGGING_RET_ERROR;
-    }
-    if (!rcutils_mkdir(name_buffer)) {
-      RCUTILS_SET_ERROR_MSG("Failed to create user .ros directory");
-      return RCL_LOGGING_RET_ERROR;
-    }
-
-    print_ret = rcutils_snprintf(name_buffer, sizeof(name_buffer), "%s/.ros/log", homedir);
-    if (print_ret < 0) {
-      RCUTILS_SET_ERROR_MSG("Failed to create log directory string");
-      return RCL_LOGGING_RET_ERROR;
-    }
-    if (!rcutils_mkdir(name_buffer)) {
-      RCUTILS_SET_ERROR_MSG("Failed to create user log directory");
-      return RCL_LOGGING_RET_ERROR;
-    }
-
-    // Now get the milliseconds since the epoch in the local timezone.
-    rcutils_time_point_value_t now;
-    rcutils_ret_t ret = rcutils_system_time_now(&now);
-    if (ret != RCUTILS_RET_OK) {
-      // We couldn't get the system time, so get out of here without setting up
-      // logging.  We don't need to call RCUTILS_SET_ERROR_MSG either since
-      // rcutils_system_time_now() already did it.
-      return RCL_LOGGING_RET_ERROR;
-    }
-    int64_t ms_since_epoch = RCUTILS_NS_TO_MS(now);
 
     // Get the program name.
     char * basec = rcutils_get_executable_name(allocator);
@@ -135,20 +172,27 @@ rcl_logging_ret_t rcl_logging_external_initialize(
       return RCL_LOGGING_RET_ERROR;
     }
 
-    print_ret = rcutils_snprintf(
-      name_buffer, sizeof(name_buffer),
-      "%s/.ros/log/%s_%" PRId64 "_%i_.log", homedir,
-      basec, ms_since_epoch, rcutils_get_pid());
+    auto print_ret = rcutils_snprintf(name_buffer, sizeof(name_buffer),
+                                      "%s_%i", basec, rcutils_get_pid());
     allocator.deallocate(basec, allocator.state);
     if (print_ret < 0) {
       RCUTILS_SET_ERROR_MSG("Failed to create log file name string");
       return RCL_LOGGING_RET_ERROR;
     }
 
-    auto sink = std::make_unique<spdlog::sinks::basic_file_sink_mt>(name_buffer, false);
-    g_root_logger = std::make_unique<spdlog::logger>("root", std::move(sink));
+    //g_root_logger = spdlog::basic_logger_mt("root", name_buffer);
+
+    spdlog::init_thread_pool(8192, 1);
+
+    auto sinks = create_sinks(name_buffer);
+    g_root_logger = std::make_shared<spdlog::async_logger>("root",
+                                                           sinks.begin(),
+                                                           sinks.end(),
+                                                           spdlog::thread_pool(),
+                                                           spdlog::async_overflow_policy::block);
 
     g_root_logger->set_pattern("%v");
+    spdlog::register_logger(g_root_logger);
   }
 
   return RCL_LOGGING_RET_OK;
