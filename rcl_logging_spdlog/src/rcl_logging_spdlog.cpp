@@ -12,6 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "rcl_logging_spdlog/logging_interface.h"
+#include "spdlog/sinks/basic_file_sink.h"
+#include "spdlog/spdlog.h"
+
+#include <cerrno>
+#include <cinttypes>
+#include <iomanip>
+#include <iostream>
+#include <memory>
+#include <mutex>
 #include <rcutils/allocator.h>
 #include <rcutils/filesystem.h>
 #include <rcutils/get_env.h>
@@ -19,19 +29,10 @@
 #include <rcutils/process.h>
 #include <rcutils/snprintf.h>
 #include <rcutils/time.h>
-
-#include <cerrno>
-#include <cinttypes>
-#include <memory>
-#include <mutex>
-#include <utility>
-
-#include "spdlog/spdlog.h"
 #include <spdlog/async.h>
 #include <spdlog/sinks/syslog_sink.h>
-#include "spdlog/sinks/basic_file_sink.h"
-
-#include "rcl_logging_spdlog/logging_interface.h"
+#include <sstream>
+#include <utility>
 
 #define RCL_LOGGING_RET_OK    (0)
 #define RCL_LOGGING_RET_ERROR (2)
@@ -41,7 +42,7 @@ extern "C" {
 #endif
 
 static std::mutex g_logger_mutex;
-static std::unique_ptr<spdlog::logger> g_root_logger = nullptr;
+static std::shared_ptr<spdlog::logger> g_root_logger = nullptr;
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -86,7 +87,6 @@ static std::string getLogDirectory()
   }
 
   logDir = logDirChar;
-  std::cout << "RCL LOG_DIR = " << logDir << std::endl;
   return logDir;
 }
 
@@ -173,17 +173,14 @@ rcl_logging_ret_t rcl_logging_external_initialize(
     }
 
     auto print_ret = rcutils_snprintf(name_buffer, sizeof(name_buffer),
-                                      "%s_%i", basec, rcutils_get_pid());
+                                      "%s", basec);
     allocator.deallocate(basec, allocator.state);
     if (print_ret < 0) {
       RCUTILS_SET_ERROR_MSG("Failed to create log file name string");
       return RCL_LOGGING_RET_ERROR;
     }
 
-    //g_root_logger = spdlog::basic_logger_mt("root", name_buffer);
-
     if(spdlog::thread_pool() == nullptr) {
-      std::cout << "initializing thread pool\n";
       spdlog::init_thread_pool(8192, 1);
     }
     auto sinks = create_sinks(name_buffer);

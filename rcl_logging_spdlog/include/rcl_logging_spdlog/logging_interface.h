@@ -15,6 +15,7 @@
 #ifndef RCL_LOGGING_SPDLOG__LOGGING_INTERFACE_H_
 #define RCL_LOGGING_SPDLOG__LOGGING_INTERFACE_H_
 
+#include <rcutils/allocator.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
