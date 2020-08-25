@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "rcl_logging_spdlog/logging_interface.h"
 #include "spdlog/sinks/basic_file_sink.h"
 #include "spdlog/spdlog.h"
 
@@ -34,12 +33,10 @@
 #include <sstream>
 #include <utility>
 
-#define RCL_LOGGING_RET_OK    (0)
-#define RCL_LOGGING_RET_ERROR (2)
+#include "spdlog/spdlog.h"
+#include "spdlog/sinks/basic_file_sink.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "rcl_logging_interface/rcl_logging_interface.h"
 
 static std::mutex g_logger_mutex;
 static std::shared_ptr<spdlog::logger> g_root_logger = nullptr;
@@ -133,7 +130,7 @@ std::vector<spdlog::sink_ptr> create_sinks(const std::string &             logfi
   file_sink->set_pattern("%v");
   file_sink->set_level(fileLevel);
 
-  auto syslog_sink = std::make_shared<spdlog::sinks::syslog_sink_mt>(logfileName, LOG_PID, LOG_USER);
+  auto syslog_sink = std::make_shared<spdlog::sinks::syslog_sink_mt>(logfileName, LOG_PID, LOG_USER, false);
   syslog_sink->set_level(consoleLevel);
 
   return {file_sink, syslog_sink};
@@ -217,7 +214,3 @@ rcl_logging_ret_t rcl_logging_external_set_logger_level(const char * name, int l
 
   return RCL_LOGGING_RET_OK;
 }
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
