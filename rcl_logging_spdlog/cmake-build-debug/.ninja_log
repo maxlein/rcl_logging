@@ -1,0 +1,3 @@
+# ninja log v5
+0	6587	1598354358296933262	CMakeFiles/rcl_logging_spdlog.dir/src/rcl_logging_spdlog.cpp.o	7f227bf741e1bb96
+6588	6836	1598354358552930643	librcl_logging_spdlog.so	9cba198618bd81c1
